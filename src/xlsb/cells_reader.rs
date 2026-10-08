@@ -26,6 +26,8 @@ where
     typ: u16,
     row: u32,
     is_1904: bool,
+    #[cfg(feature = "rust_decimal")]
+    decimal_numbers: bool,
     dimensions: Dimensions,
     buf: Vec<u8>,
 }
@@ -70,6 +72,8 @@ where
             iter,
             formats,
             is_1904,
+            #[cfg(feature = "rust_decimal")]
+            decimal_numbers: false,
             strings,
             extern_sheets,
             metadata_names,
@@ -78,6 +82,68 @@ where
             row: 0,
             buf,
         })
+    }
+
+    /// Read numbers as `DataRef::Decimal`, see `Reader::with_decimal_numbers()`.
+    #[cfg(feature = "rust_decimal")]
+    pub(crate) fn set_decimal_numbers(&mut self, enabled: bool) {
+        self.decimal_numbers = enabled;
+    }
+
+    /// Convert a `f64` number to a `DataRef`, according to the cell format
+    /// and the decimal option.
+    fn number(&self, v: f64) -> DataRef<'static> {
+        let format = cell_format(self.formats, &self.buf);
+        #[cfg(feature = "rust_decimal")]
+        if self.decimal_numbers {
+            return crate::decimal::format_excel_f64_decimal_ref(v, format, self.is_1904);
+        }
+        format_excel_f64_ref(v, format, self.is_1904)
+    }
+
+    /// Convert a RK integer to a `DataRef`.
+    fn rk_int(&self, v: i64) -> DataRef<'static> {
+        #[cfg(feature = "rust_decimal")]
+        if self.decimal_numbers && !self.is_datetime_format() {
+            return DataRef::Decimal(v.into());
+        }
+        DataRef::Int(v)
+    }
+
+    /// Convert a RK integer, scaled by 1/100, to a `DataRef`.
+    fn rk_d100_int(&self, v: i64) -> DataRef<'static> {
+        #[cfg(feature = "rust_decimal")]
+        if self.decimal_numbers && !self.is_datetime_format() {
+            // Exact, unlike the division of a `f64` by 100.
+            return DataRef::Decimal(rust_decimal::Decimal::new(v, 2).normalize());
+        }
+        format_excel_f64_ref(
+            v as f64 / 100.0,
+            cell_format(self.formats, &self.buf),
+            self.is_1904,
+        )
+    }
+
+    /// Convert a RK float, scaled by 1/100, to a `DataRef`.
+    fn rk_d100_float(&self, v: f64) -> DataRef<'static> {
+        #[cfg(feature = "rust_decimal")]
+        if self.decimal_numbers && !self.is_datetime_format() {
+            // Scale the decimal rather than the `f64` to avoid a rounding error.
+            if let Some(d) = crate::decimal::decimal_from_f64(v)
+                .and_then(|d| d.checked_div(rust_decimal::Decimal::ONE_HUNDRED))
+            {
+                return DataRef::Decimal(d.normalize());
+            }
+        }
+        self.number(v / 100.0)
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn is_datetime_format(&self) -> bool {
+        matches!(
+            cell_format(self.formats, &self.buf),
+            Some(CellFormat::DateTime | CellFormat::TimeDelta)
+        )
     }
 
     pub fn dimensions(&self) -> Dimensions {
@@ -100,21 +166,19 @@ where
                     if is_int {
                         let v = (read_i32(&self.buf[8..12]) >> 2) as i64;
                         if d100 {
-                            let v = (v as f64) / 100.0;
-                            format_excel_f64_ref(
-                                v,
-                                cell_format(self.formats, &self.buf),
-                                self.is_1904,
-                            )
+                            self.rk_d100_int(v)
                         } else {
-                            DataRef::Int(v)
+                            self.rk_int(v)
                         }
                     } else {
                         let mut v = [0u8; 8];
                         v[4..].copy_from_slice(&self.buf[8..12]);
                         let v = read_f64(&v);
-                        let v = if d100 { v / 100.0 } else { v };
-                        format_excel_f64_ref(v, cell_format(self.formats, &self.buf), self.is_1904)
+                        if d100 {
+                            self.rk_d100_float(v)
+                        } else {
+                            self.number(v)
+                        }
                     }
                 }
                 0x0003 => {
@@ -135,7 +199,7 @@ where
                 0x0004 | 0x000A => DataRef::Bool(self.buf[8] != 0), // BrtCellBool or BrtFmlaBool
                 0x0005 | 0x0009 => {
                     let v = read_f64(&self.buf[8..16]);
-                    format_excel_f64_ref(v, cell_format(self.formats, &self.buf), self.is_1904)
+                    self.number(v)
                 } // BrtCellReal or BrtFmlaNum
                 0x0006 | 0x0008 => DataRef::String(wide_str(&self.buf[8..], &mut 0)?.into_owned()), // BrtCellSt or BrtFmlaString
                 0x0007 => {

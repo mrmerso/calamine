@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- Added the optional `rust_decimal` feature to read numbers as
+  `rust_decimal::Decimal`. It adds `Reader::with_decimal_numbers()`, the
+  `Data::Decimal` and `DataRef::Decimal` variants, and the
+  `DataType::is_decimal()`, `DataType::get_decimal()` and
+  `DataType::as_decimal()` methods.
+
+  Xlsx and ods numbers are converted directly from the number text in the
+  file, never via `f64`. The conversion is lossless when the value fits in a
+  `Decimal`, otherwise it is rounded half to even. Xls and xlsb numbers are
+  stored as `f64` and converted from their shortest round trip representation.
+  Numbers too large for a `Decimal` and cells with a date format are read as
+  before.
+
+  Note: enabling the feature adds a variant to `Data` and `DataRef`, so
+  exhaustive matches on them need a wildcard arm.
+
+
 ## [0.36.1] - 2026-07-27
 
 ### Fixed

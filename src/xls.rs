@@ -150,6 +150,10 @@ pub struct XlsOptions {
     pub force_codepage: Option<u16>,
     /// Row to use as header
     pub header_row: HeaderRow,
+    /// Read numbers as `Data::Decimal`, see `Reader::with_decimal_numbers()`.
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    pub decimal_numbers: bool,
 }
 
 struct SheetData {
@@ -406,6 +410,12 @@ impl<RS: Read + Seek> Reader<RS> for Xls<RS> {
         self
     }
 
+    #[cfg(feature = "rust_decimal")]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        self.options.decimal_numbers = enabled;
+        self
+    }
+
     fn vba_project(&mut self) -> Result<Option<VbaProject>, XlsError> {
         // Reads vba once for all (better than reading all worksheets once for all)
         if !self.cfb.has_directory("_VBA_PROJECT_CUR") {
@@ -427,6 +437,15 @@ impl<RS: Read + Seek> Reader<RS> for Xls<RS> {
             .map(|r| r.range.clone())
             .ok_or_else(|| XlsError::WorksheetNotFound(name.into()))?;
 
+        // Xls stores numbers as `f64` (or integers) and sheets are parsed when
+        // the workbook is opened, so numbers are converted afterwards.
+        #[cfg(feature = "rust_decimal")]
+        let sheet = if self.options.decimal_numbers {
+            crate::decimal::range_to_decimal(sheet)
+        } else {
+            sheet
+        };
+
         match self.options.header_row {
             HeaderRow::FirstNonEmptyRow => Ok(sheet),
             HeaderRow::Row(header_row_idx) => {
@@ -443,7 +462,16 @@ impl<RS: Read + Seek> Reader<RS> for Xls<RS> {
     fn worksheets(&mut self) -> Vec<(String, Range<Data>)> {
         self.sheets
             .iter()
-            .map(|(name, sheet)| (name.to_owned(), sheet.range.clone()))
+            .map(|(name, sheet)| {
+                let range = sheet.range.clone();
+                #[cfg(feature = "rust_decimal")]
+                let range = if self.options.decimal_numbers {
+                    crate::decimal::range_to_decimal(range)
+                } else {
+                    range
+                };
+                (name.to_owned(), range)
+            })
             .collect()
     }
 

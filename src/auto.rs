@@ -107,6 +107,25 @@ where
         self
     }
 
+    #[cfg(feature = "rust_decimal")]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        match self {
+            Sheets::Xls(e) => {
+                e.with_decimal_numbers(enabled);
+            }
+            Sheets::Xlsx(e) => {
+                e.with_decimal_numbers(enabled);
+            }
+            Sheets::Xlsb(e) => {
+                e.with_decimal_numbers(enabled);
+            }
+            Sheets::Ods(e) => {
+                e.with_decimal_numbers(enabled);
+            }
+        }
+        self
+    }
+
     /// Gets `VbaProject`
     fn vba_project(&mut self) -> Result<Option<VbaProject>, Self::Error> {
         match self {

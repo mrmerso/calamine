@@ -38,6 +38,10 @@ pub enum Data {
     Int(i64),
     /// Float
     Float(f64),
+    /// Decimal number, see [`Reader::with_decimal_numbers()`](crate::Reader::with_decimal_numbers)
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    Decimal(rust_decimal::Decimal),
     /// String
     String(String),
     /// Boolean
@@ -66,6 +70,11 @@ impl DataType for Data {
     }
     fn is_float(&self) -> bool {
         matches!(*self, Data::Float(_))
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn is_decimal(&self) -> bool {
+        matches!(*self, Data::Decimal(_))
     }
     fn is_bool(&self) -> bool {
         matches!(*self, Data::Bool(_))
@@ -99,6 +108,15 @@ impl DataType for Data {
     }
     fn get_float(&self) -> Option<f64> {
         if let Data::Float(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn get_decimal(&self) -> Option<rust_decimal::Decimal> {
+        if let Data::Decimal(v) = self {
             Some(*v)
         } else {
             None
@@ -150,6 +168,8 @@ impl DataType for Data {
     fn as_string(&self) -> Option<String> {
         match self {
             Data::Float(v) => Some(v.to_string()),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => Some(v.to_string()),
             Data::Int(v) => Some(v.to_string()),
             Data::String(v) => Some(v.clone()),
             _ => None,
@@ -160,6 +180,8 @@ impl DataType for Data {
         match self {
             Data::Int(v) => Some(*v),
             Data::Float(v) => Some(*v as i64),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => rust_decimal::prelude::ToPrimitive::to_i64(&v.trunc()),
             Data::Bool(v) => Some(*v as i64),
             Data::String(v) => atoi_simd::parse::<i64, true, false>(v.as_bytes()).ok(),
             _ => None,
@@ -170,6 +192,8 @@ impl DataType for Data {
         match self {
             Data::Int(v) => Some(*v as f64),
             Data::Float(v) => Some(*v),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => rust_decimal::prelude::ToPrimitive::to_f64(v),
             Data::Bool(v) => Some((*v as i32).into()),
             Data::String(v) => fast_float2::parse(v).ok(),
             _ => None,
@@ -212,6 +236,8 @@ impl fmt::Display for Data {
         match self {
             Data::Int(e) => write!(f, "{e}"),
             Data::Float(e) => write!(f, "{e}"),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(e) => write!(f, "{e}"),
             Data::String(e) => write!(f, "{e}"),
             Data::Bool(e) => write!(f, "{e}"),
             Data::DateTime(e) => write!(f, "{e}"),
@@ -306,6 +332,8 @@ macro_rules! define_from {
 
 define_from!(Data::Int, i64);
 define_from!(Data::Float, f64);
+#[cfg(feature = "rust_decimal")]
+define_from!(Data::Decimal, rust_decimal::Decimal);
 define_from!(Data::String, String);
 define_from!(Data::Bool, bool);
 define_from!(Data::Error, CellErrorType);
@@ -342,6 +370,10 @@ pub enum DataRef<'a> {
     Int(i64),
     /// Float
     Float(f64),
+    /// Decimal number, see [`Reader::with_decimal_numbers()`](crate::Reader::with_decimal_numbers)
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    Decimal(rust_decimal::Decimal),
     /// String
     String(String),
     /// Shared String
@@ -372,6 +404,11 @@ impl DataType for DataRef<'_> {
 
     fn is_float(&self) -> bool {
         matches!(*self, DataRef::Float(_))
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn is_decimal(&self) -> bool {
+        matches!(*self, DataRef::Decimal(_))
     }
 
     fn is_bool(&self) -> bool {
@@ -408,6 +445,15 @@ impl DataType for DataRef<'_> {
 
     fn get_float(&self) -> Option<f64> {
         if let DataRef::Float(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn get_decimal(&self) -> Option<rust_decimal::Decimal> {
+        if let DataRef::Decimal(v) = self {
             Some(*v)
         } else {
             None
@@ -461,6 +507,8 @@ impl DataType for DataRef<'_> {
     fn as_string(&self) -> Option<String> {
         match self {
             DataRef::Float(v) => Some(v.to_string()),
+            #[cfg(feature = "rust_decimal")]
+            DataRef::Decimal(v) => Some(v.to_string()),
             DataRef::Int(v) => Some(v.to_string()),
             DataRef::String(v) => Some(v.clone()),
             DataRef::SharedString(v) => Some(v.to_string()),
@@ -472,6 +520,8 @@ impl DataType for DataRef<'_> {
         match self {
             DataRef::Int(v) => Some(*v),
             DataRef::Float(v) => Some(*v as i64),
+            #[cfg(feature = "rust_decimal")]
+            DataRef::Decimal(v) => rust_decimal::prelude::ToPrimitive::to_i64(&v.trunc()),
             DataRef::Bool(v) => Some(*v as i64),
             DataRef::String(v) => atoi_simd::parse::<i64, true, false>(v.as_bytes()).ok(),
             DataRef::SharedString(v) => atoi_simd::parse::<i64, true, false>(v.as_bytes()).ok(),
@@ -483,6 +533,8 @@ impl DataType for DataRef<'_> {
         match self {
             DataRef::Int(v) => Some(*v as f64),
             DataRef::Float(v) => Some(*v),
+            #[cfg(feature = "rust_decimal")]
+            DataRef::Decimal(v) => rust_decimal::prelude::ToPrimitive::to_f64(v),
             DataRef::Bool(v) => Some((*v as i32).into()),
             DataRef::String(v) => fast_float2::parse(v).ok(),
             DataRef::SharedString(v) => fast_float2::parse(v).ok(),
@@ -533,6 +585,13 @@ pub trait DataType {
     /// Assess if datatype is a float
     fn is_float(&self) -> bool;
 
+    /// Assess if datatype is a decimal
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    fn is_decimal(&self) -> bool {
+        false
+    }
+
     /// Assess if datatype is a bool
     fn is_bool(&self) -> bool;
 
@@ -556,6 +615,13 @@ pub trait DataType {
 
     /// Try getting float value
     fn get_float(&self) -> Option<f64>;
+
+    /// Try getting decimal value
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    fn get_decimal(&self) -> Option<rust_decimal::Decimal> {
+        None
+    }
 
     /// Try getting bool value
     fn get_bool(&self) -> Option<bool>;
@@ -583,6 +649,30 @@ pub trait DataType {
 
     /// Try converting data type into a float
     fn as_f64(&self) -> Option<f64>;
+
+    /// Try converting data type into a decimal
+    ///
+    /// Decimals and ints are converted exactly, strings are parsed (in plain
+    /// or scientific notation) and floats are converted from their shortest
+    /// round trip representation, i.e. `0.1f64` becomes `0.1`. Note that a
+    /// float has already lost precision compared to the number text in the
+    /// file, use [`Reader::with_decimal_numbers()`](crate::Reader::with_decimal_numbers)
+    /// to read decimals losslessly.
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    fn as_decimal(&self) -> Option<rust_decimal::Decimal> {
+        if let Some(v) = self.get_decimal() {
+            Some(v)
+        } else if let Some(v) = self.get_int() {
+            Some(v.into())
+        } else if let Some(v) = self.get_float() {
+            crate::decimal::decimal_from_f64(v)
+        } else if let Some(v) = self.get_string() {
+            crate::decimal::decimal_from_str(v.as_bytes())
+        } else {
+            None
+        }
+    }
 
     /// Try converting data type into a date
     #[cfg(feature = "chrono")]
@@ -643,7 +733,11 @@ pub trait DataType {
     fn as_datetime(&self) -> Option<chrono::NaiveDateTime> {
         use std::str::FromStr;
 
-        if self.is_int() || self.is_float() {
+        let is_number = self.is_int() || self.is_float();
+        #[cfg(feature = "rust_decimal")]
+        let is_number = is_number || self.is_decimal();
+
+        if is_number {
             self.as_f64()
                 .map(|f| ExcelDateTime::from_value_only(f).as_datetime())
         } else if self.is_datetime() {
@@ -663,6 +757,8 @@ impl<'a> From<DataRef<'a>> for Data {
         match value {
             DataRef::Int(v) => Data::Int(v),
             DataRef::Float(v) => Data::Float(v),
+            #[cfg(feature = "rust_decimal")]
+            DataRef::Decimal(v) => Data::Decimal(v),
             DataRef::String(v) => Data::String(v),
             DataRef::SharedString(v) => Data::String(v.into()),
             DataRef::Bool(v) => Data::Bool(v),

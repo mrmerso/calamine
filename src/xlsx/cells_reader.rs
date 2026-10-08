@@ -28,6 +28,8 @@ struct WorkbookContext<'a> {
     strings: &'a [String],
     formats: &'a [CellFormat],
     is_1904: bool,
+    #[cfg(feature = "rust_decimal")]
+    decimal_numbers: bool,
 }
 
 /// Reusable scratch buffers for cell value parsing (avoid per-cell allocations).
@@ -181,6 +183,8 @@ where
     strings: &'a [String],
     formats: &'a [CellFormat],
     is_1904: bool,
+    #[cfg(feature = "rust_decimal")]
+    decimal_numbers: bool,
     dimensions: Dimensions,
     row_index: u32,
     col_index: u32,
@@ -237,6 +241,8 @@ where
             strings,
             formats,
             is_1904,
+            #[cfg(feature = "rust_decimal")]
+            decimal_numbers: false,
             dimensions,
             row_index: 0,
             col_index: 0,
@@ -245,6 +251,12 @@ where
             value_bufs: ValueBufs::new(),
             formulas: Vec::with_capacity(1024),
         })
+    }
+
+    /// Read numbers as `DataRef::Decimal`, see `Reader::with_decimal_numbers()`.
+    #[cfg(feature = "rust_decimal")]
+    pub(crate) fn set_decimal_numbers(&mut self, enabled: bool) {
+        self.decimal_numbers = enabled;
     }
 
     /// Return the worksheet dimensions declared by the sheet XML.
@@ -285,6 +297,8 @@ where
                                     strings: self.strings,
                                     formats: self.formats,
                                     is_1904: self.is_1904,
+                                    #[cfg(feature = "rust_decimal")]
+                                    decimal_numbers: self.decimal_numbers,
                                 };
                                 value = read_value(
                                     &ctx,
@@ -456,6 +470,8 @@ where
                                     strings: self.strings,
                                     formats: self.formats,
                                     is_1904: self.is_1904,
+                                    #[cfg(feature = "rust_decimal")]
+                                    decimal_numbers: self.decimal_numbers,
                                 };
                                 value = read_value(
                                     &ctx,
@@ -655,6 +671,20 @@ fn read_v<'s>(
         Some(b"n") | None => {
             if v.is_empty() {
                 return Ok(DataRef::Empty);
+            }
+            // Parse decimals directly from the number text to avoid any loss of
+            // precision. Values that are not valid decimals (e.g. too large) are
+            // handled below.
+            #[cfg(feature = "rust_decimal")]
+            if ctx.decimal_numbers
+                && !matches!(
+                    cell_format,
+                    Some(CellFormat::DateTime | CellFormat::TimeDelta)
+                )
+            {
+                if let Some(d) = crate::decimal::decimal_from_str(v) {
+                    return Ok(DataRef::Decimal(d));
+                }
             }
             // If type is not known, we try to parse as Float for utility, but fall back to
             // String if this fails.

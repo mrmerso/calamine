@@ -611,6 +611,43 @@ impl<'a> ToCellDeserializer<'a> for Data {
     }
 }
 
+/// Conversion of a cell decimal into the numeric type requested by the visitor.
+#[cfg(feature = "rust_decimal")]
+trait FromDecimal: Sized {
+    fn from_decimal(d: &rust_decimal::Decimal) -> Option<Self>;
+}
+
+#[cfg(feature = "rust_decimal")]
+macro_rules! from_decimal_int {
+    ($($typ:ty),*) => {
+        $(
+            impl FromDecimal for $typ {
+                fn from_decimal(d: &rust_decimal::Decimal) -> Option<Self> {
+                    use rust_decimal::prelude::ToPrimitive;
+                    d.trunc().to_i128().and_then(|v| <$typ>::try_from(v).ok())
+                }
+            }
+        )*
+    };
+}
+
+#[cfg(feature = "rust_decimal")]
+from_decimal_int!(i64, i32, i16, i8, u64, u32, u16, u8);
+
+#[cfg(feature = "rust_decimal")]
+impl FromDecimal for f64 {
+    fn from_decimal(d: &rust_decimal::Decimal) -> Option<Self> {
+        rust_decimal::prelude::ToPrimitive::to_f64(d)
+    }
+}
+
+#[cfg(feature = "rust_decimal")]
+impl FromDecimal for f32 {
+    fn from_decimal(d: &rust_decimal::Decimal) -> Option<Self> {
+        rust_decimal::prelude::ToPrimitive::to_f32(d)
+    }
+}
+
 macro_rules! deserialize_num {
     ($typ:ty, $method:ident, $visit:ident) => {
         fn $method<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -620,6 +657,13 @@ macro_rules! deserialize_num {
             match self.data_type {
                 Data::Float(v) => visitor.$visit(*v as $typ),
                 Data::Int(v) => visitor.$visit(*v as $typ),
+                #[cfg(feature = "rust_decimal")]
+                Data::Decimal(v) => {
+                    let v = <$typ as FromDecimal>::from_decimal(v).ok_or_else(|| {
+                        DeError::Custom(format!("Expecting {}, got '{}'", stringify!($typ), v))
+                    })?;
+                    visitor.$visit(v)
+                }
                 Data::String(s) => {
                     let v = s.parse().map_err(|_| {
                         DeError::Custom(format!("Expecting {}, got '{}'", stringify!($typ), s))
@@ -656,6 +700,9 @@ impl<'a, 'de> serde::Deserializer<'de> for DataDeserializer<'a> {
         match self.data_type {
             Data::String(v) => visitor.visit_str(v),
             Data::Float(v) => visitor.visit_f64(*v),
+            // Decimals are passed as strings so they are not converted into `f64`.
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => visitor.visit_str(&v.to_string()),
             Data::Bool(v) => visitor.visit_bool(*v),
             Data::Int(v) => visitor.visit_i64(*v),
             Data::Empty => visitor.visit_unit(),
@@ -677,6 +724,8 @@ impl<'a, 'de> serde::Deserializer<'de> for DataDeserializer<'a> {
             Data::String(v) => visitor.visit_str(v),
             Data::Empty => visitor.visit_str(""),
             Data::Float(v) => visitor.visit_str(&v.to_string()),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => visitor.visit_str(&v.to_string()),
             Data::Int(v) => visitor.visit_str(&v.to_string()),
             Data::Bool(v) => visitor.visit_str(&v.to_string()),
             Data::DateTime(v) => visitor.visit_str(&v.to_string()),
@@ -731,6 +780,8 @@ impl<'a, 'de> serde::Deserializer<'de> for DataDeserializer<'a> {
             },
             Data::Empty => visitor.visit_bool(false),
             Data::Float(v) => visitor.visit_bool(*v != 0.),
+            #[cfg(feature = "rust_decimal")]
+            Data::Decimal(v) => visitor.visit_bool(!v.is_zero()),
             Data::Int(v) => visitor.visit_bool(*v != 0),
             Data::DateTime(v) => visitor.visit_bool(v.as_f64() != 0.),
             Data::DateTimeIso(_) => visitor.visit_bool(true),

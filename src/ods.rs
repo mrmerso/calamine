@@ -95,6 +95,8 @@ pub enum OdsError {
 #[non_exhaustive]
 struct OdsOptions {
     pub header_row: HeaderRow,
+    #[cfg(feature = "rust_decimal")]
+    pub decimal_numbers: bool,
 }
 
 from_err!(std::io::Error, OdsError, Io);
@@ -169,6 +171,25 @@ pub struct Ods<RS> {
     pictures: Option<Vec<(String, Vec<u8>)>>,
     /// Reader options
     options: OdsOptions,
+    /// Archive kept to parse the content again when the decimal option changes
+    #[cfg(feature = "rust_decimal")]
+    zip: ZipArchive<RS>,
+    /// Whether `sheets` were parsed with decimal numbers
+    #[cfg(feature = "rust_decimal")]
+    parsed_decimal_numbers: bool,
+}
+
+impl<RS: Read + Seek> Ods<RS> {
+    /// Parse the content again if the decimal option changed since it was parsed.
+    #[cfg(feature = "rust_decimal")]
+    fn reparse_if_needed(&mut self) -> Result<(), OdsError> {
+        if self.parsed_decimal_numbers != self.options.decimal_numbers {
+            let content = parse_content(&mut self.zip, self.options.decimal_numbers)?;
+            self.sheets = content.sheets;
+            self.parsed_decimal_numbers = self.options.decimal_numbers;
+        }
+        Ok(())
+    }
 }
 
 impl<RS> Reader<RS> for Ods<RS>
@@ -202,7 +223,7 @@ where
             sheets,
             sheets_metadata,
             defined_names,
-        } = parse_content(zip)?;
+        } = parse_content(&mut zip, false)?;
         let metadata = Metadata {
             sheets: sheets_metadata,
             names: defined_names,
@@ -215,11 +236,21 @@ where
             #[cfg(feature = "picture")]
             pictures,
             options: OdsOptions::default(),
+            #[cfg(feature = "rust_decimal")]
+            zip,
+            #[cfg(feature = "rust_decimal")]
+            parsed_decimal_numbers: false,
         })
     }
 
     fn with_header_row(&mut self, header_row: HeaderRow) -> &mut Self {
         self.options.header_row = header_row;
+        self
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        self.options.decimal_numbers = enabled;
         self
     }
 
@@ -235,6 +266,9 @@ where
 
     /// Read worksheet data in corresponding worksheet path
     fn worksheet_range(&mut self, name: &str) -> Result<Range<Data>, OdsError> {
+        #[cfg(feature = "rust_decimal")]
+        self.reparse_if_needed()?;
+
         let sheet = self
             .sheets
             .get(name)
@@ -256,6 +290,11 @@ where
     }
 
     fn worksheets(&mut self) -> Vec<(String, Range<Data>)> {
+        #[cfg(feature = "rust_decimal")]
+        if let Err(e) = self.reparse_if_needed() {
+            warn!("failed to parse ods content with the decimal option: {e}");
+        }
+
         self.sheets
             .iter()
             .map(|(name, (range, _formula))| (name.to_owned(), range.clone()))
@@ -326,7 +365,10 @@ fn check_for_password_protected<RS: Read + Seek>(zip: &mut ZipArchive<RS>) -> Re
 }
 
 /// Parses content.xml and store the result in `self.content`
-fn parse_content<RS: Read + Seek>(mut zip: ZipArchive<RS>) -> Result<Content, OdsError> {
+fn parse_content<RS: Read + Seek>(
+    zip: &mut ZipArchive<RS>,
+    decimal_numbers: bool,
+) -> Result<Content, OdsError> {
     let mut reader = match zip.by_name("content.xml") {
         Ok(f) => {
             let mut r = XmlReader::from_reader(BufReader::new(f));
@@ -380,7 +422,7 @@ fn parse_content<RS: Read + Seek>(mut zip: ZipArchive<RS>) -> Result<Content, Od
                     .unwrap_or(SheetVisible::Visible);
                 if let Some(v) = e.raw_attr(b"table:name")? {
                     let name = decode_attr(&reader.decoder(), v)?;
-                    let (range, formulas) = read_table(&mut reader)?;
+                    let (range, formulas) = read_table(&mut reader, decimal_numbers)?;
                     sheets_metadata.push(Sheet {
                         name: name.clone(),
                         typ: SheetType::WorkSheet,
@@ -405,7 +447,10 @@ fn parse_content<RS: Read + Seek>(mut zip: ZipArchive<RS>) -> Result<Content, Od
     })
 }
 
-fn read_table<RS>(reader: &mut OdsReader<'_, RS>) -> Result<(Range<Data>, Range<String>), OdsError>
+fn read_table<RS>(
+    reader: &mut OdsReader<'_, RS>,
+    decimal_numbers: bool,
+) -> Result<(Range<Data>, Range<String>), OdsError>
 where
     RS: Read + Seek,
 {
@@ -442,6 +487,7 @@ where
                     &mut cell_buf,
                     &mut cells,
                     &mut formulas,
+                    decimal_numbers,
                 )?;
                 cols.push(cells.len());
                 rows_repeats.push(capped_repeats);
@@ -583,6 +629,7 @@ fn read_row<RS>(
     cell_buf: &mut Vec<u8>,
     cells: &mut Vec<Data>,
     formulas: &mut Vec<String>,
+    decimal_numbers: bool,
 ) -> Result<(), OdsError>
 where
     RS: Read + Seek,
@@ -601,7 +648,8 @@ where
                     None => 1,
                 };
 
-                let (value, formula, is_closed) = get_datatype(reader, &e, cell_buf)?;
+                let (value, formula, is_closed) =
+                    get_datatype(reader, &e, cell_buf, decimal_numbers)?;
 
                 // Cap empty_col_repeats to not exceed MAX_COLUMNS
                 let current_cols = cells.len() - row_start;
@@ -654,6 +702,26 @@ where
     Ok(())
 }
 
+/// Parses an `office:value` number.
+///
+/// With `decimal_numbers` the number is parsed directly from its text into a
+/// `Data::Decimal` to avoid any loss of precision. Numbers too large for a
+/// decimal are read as `Data::Float`.
+fn parse_number(v: &str, decimal_numbers: bool) -> Result<Data, OdsError> {
+    #[cfg(feature = "rust_decimal")]
+    if decimal_numbers {
+        if let Some(d) = crate::decimal::decimal_from_str(v.as_bytes()) {
+            return Ok(Data::Decimal(d));
+        }
+    }
+    #[cfg(not(feature = "rust_decimal"))]
+    let _ = decimal_numbers;
+
+    fast_float2::parse(v.as_bytes())
+        .map(Data::Float)
+        .map_err(|_| OdsError::ParseFloat(v.parse::<f64>().unwrap_err()))
+}
+
 /// Converts table-cell element into a `Data`
 ///
 /// ODF 1.2-19.385
@@ -661,6 +729,7 @@ fn get_datatype<RS>(
     reader: &mut OdsReader<'_, RS>,
     e: &BytesStart<'_>,
     buf: &mut Vec<u8>,
+    decimal_numbers: bool,
 ) -> Result<(Data, String, bool), OdsError>
 where
     RS: Read + Seek,
@@ -674,10 +743,7 @@ where
         match key {
             b"office:value" if !is_value_set => {
                 let v = reader.decoder().decode(value)?;
-                val = Data::Float(
-                    fast_float2::parse(v.as_bytes())
-                        .map_err(|_| OdsError::ParseFloat(v.parse::<f64>().unwrap_err()))?,
-                );
+                val = parse_number(&v, decimal_numbers)?;
                 is_value_set = true;
             }
             b"office:string-value" | b"office:date-value" | b"office:time-value"

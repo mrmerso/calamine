@@ -281,6 +281,8 @@ pub struct Xlsx<RS> {
 #[non_exhaustive]
 struct XlsxOptions {
     pub header_row: HeaderRow,
+    #[cfg(feature = "rust_decimal")]
+    pub decimal_numbers: bool,
 }
 
 impl<RS: Read + Seek> Xlsx<RS> {
@@ -2531,7 +2533,11 @@ impl<RS: Read + Seek> Xlsx<RS> {
         let is_1904 = self.is_1904;
         let strings = &self.strings;
         let formats = &self.formats;
-        XlsxCellReader::new(xml, strings, formats, is_1904)
+        #[allow(unused_mut)]
+        let mut reader = XlsxCellReader::new(xml, strings, formats, is_1904)?;
+        #[cfg(feature = "rust_decimal")]
+        reader.set_decimal_numbers(self.options.decimal_numbers);
+        Ok(reader)
     }
 }
 
@@ -2571,6 +2577,12 @@ impl<RS: Read + Seek> Reader<RS> for Xlsx<RS> {
 
     fn with_header_row(&mut self, header_row: HeaderRow) -> &mut Self {
         self.options.header_row = header_row;
+        self
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        self.options.decimal_numbers = enabled;
         self
     }
 

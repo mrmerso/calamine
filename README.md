@@ -195,6 +195,16 @@ crate. They are all off by default.
 - `chrono`: Adds support for Chrono date/time types to the API.
 - `dates`: A deprecated backwards compatible synonym for the `chrono` feature.
 - `picture`: Adds support for reading raw data for pictures in spreadsheets.
+- `rust_decimal`: Adds support for reading numbers as
+  [`rust_decimal::Decimal`](https://docs.rs/rust_decimal) via
+  `Reader::with_decimal_numbers()`. Numbers in xlsx and ods files are converted
+  directly from the number text, without loss of precision when the value fits
+  in a `Decimal`.
+
+  Note: this feature adds a `Data::Decimal` variant. Code matching
+  exhaustively on `Data` or `DataRef` should add a wildcard `_` arm, since the
+  variant appears whenever any crate in the dependency graph enables the
+  feature.
 
 A `calamine` feature can be enabled in your `Cargo.toml` file as follows:
 

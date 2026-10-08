@@ -148,6 +148,8 @@ impl std::error::Error for XlsbError {
 #[non_exhaustive]
 struct XlsbOptions {
     pub header_row: HeaderRow,
+    #[cfg(feature = "rust_decimal")]
+    pub decimal_numbers: bool,
 }
 
 /// A Xlsb reader
@@ -428,14 +430,18 @@ impl<RS: Read + Seek> Xlsb<RS> {
             None => return Err(XlsbError::WorksheetNotFound(name.into())),
         };
         let iter = RecordIter::from_zip(&mut self.zip, &path, &self.zip_path_cache)?;
-        XlsbCellsReader::new(
+        #[allow(unused_mut)]
+        let mut reader = XlsbCellsReader::new(
             iter,
             &self.formats,
             &self.strings,
             &self.extern_sheets,
             &self.metadata.names,
             self.is_1904,
-        )
+        )?;
+        #[cfg(feature = "rust_decimal")]
+        reader.set_decimal_numbers(self.options.decimal_numbers);
+        Ok(reader)
     }
 
     #[cfg(feature = "picture")]
@@ -500,6 +506,12 @@ impl<RS: Read + Seek> Reader<RS> for Xlsb<RS> {
 
     fn with_header_row(&mut self, header_row: HeaderRow) -> &mut Self {
         self.options.header_row = header_row;
+        self
+    }
+
+    #[cfg(feature = "rust_decimal")]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        self.options.decimal_numbers = enabled;
         self
     }
 

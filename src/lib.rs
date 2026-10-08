@@ -69,6 +69,8 @@
 //! - `chrono`: Adds support for Chrono date/time types to the API.
 //! - `dates`: A deprecated backwards compatible synonym for the `chrono` feature.
 //! - `picture`: Adds support for reading raw data for pictures in spreadsheets.
+//! - `rust_decimal`: Adds support for reading numbers as [`rust_decimal::Decimal`],
+//!   see [`Reader::with_decimal_numbers()`].
 //!
 //! A `calamine` feature can be enabled in your `Cargo.toml` file as follows:
 //!
@@ -84,6 +86,8 @@ mod attrs;
 mod auto;
 mod cfb;
 mod datatype;
+#[cfg(feature = "rust_decimal")]
+mod decimal;
 mod formats;
 mod ods;
 mod xls;
@@ -103,6 +107,10 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::ops::{Index, IndexMut};
 use std::path::Path;
+
+#[cfg(feature = "rust_decimal")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+pub use rust_decimal;
 
 pub use crate::auto::{open_workbook_auto, open_workbook_auto_from_rs, Sheets};
 pub use crate::datatype::{Data, DataRef, DataType, ExcelDateTime, ExcelDateTimeType};
@@ -321,6 +329,44 @@ where
     /// Set header row (i.e. first row to be read)
     /// If `header_row` is `None`, the first non-empty row will be used as header row
     fn with_header_row(&mut self, header_row: HeaderRow) -> &mut Self;
+
+    /// Read numbers as [`Data::Decimal`] instead of [`Data::Float`].
+    ///
+    /// Numbers in text based formats (xlsx, ods) are converted directly from
+    /// the number text in the file, never via `f64`, so the conversion is
+    /// lossless whenever the value fits into a [`rust_decimal::Decimal`] (at
+    /// most 28 fractional digits and 28-29 significant digits). Otherwise the
+    /// value is rounded, half to even, to the nearest `Decimal`.
+    ///
+    /// Binary formats (xls, xlsb) store numbers as `f64` (or as integers,
+    /// optionally scaled by 1/100, which are converted exactly). A `f64` is
+    /// converted from its shortest round trip representation, e.g. `0.1f64`
+    /// becomes `0.1`.
+    ///
+    /// Numbers too large for a `Decimal` (above ~7.9e28) and non finite
+    /// numbers are still read as [`Data::Float`]. Cells with a date or time
+    /// number format are still read as [`Data::DateTime`].
+    ///
+    /// The default implementation does nothing, all the `calamine` readers
+    /// override it.
+    ///
+    /// # Examples
+    /// ```
+    /// use calamine::{open_workbook, Data, Reader, Xlsx};
+    /// use calamine::rust_decimal::Decimal;
+    ///
+    /// # let path = format!("{}/tests/issue3.xlsm", env!("CARGO_MANIFEST_DIR"));
+    /// let mut workbook: Xlsx<_> = open_workbook(path).expect("Cannot open file");
+    /// workbook.with_decimal_numbers(true);
+    /// let range = workbook.worksheet_range("Sheet1").expect("Cannot read sheet");
+    /// assert_eq!(range.get_value((0, 0)), Some(&Data::Decimal(Decimal::from(1))));
+    /// ```
+    #[cfg(feature = "rust_decimal")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rust_decimal")))]
+    fn with_decimal_numbers(&mut self, enabled: bool) -> &mut Self {
+        let _ = enabled;
+        self
+    }
 
     /// Gets `VbaProject`
     fn vba_project(&mut self) -> Result<Option<VbaProject>, Self::Error>;

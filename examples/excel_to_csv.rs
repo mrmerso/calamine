@@ -64,6 +64,8 @@ fn write_to_csv<W: Write>(output_file: &mut W, range: &Range<Data>) -> std::io::
                 Data::Bool(b) => write!(output_file, "{b}"),
                 Data::Error(e) => write!(output_file, "{e:?}"),
                 Data::Float(f) => write!(output_file, "{f}"),
+                #[cfg(feature = "rust_decimal")]
+                Data::Decimal(d) => write!(output_file, "{d}"),
                 Data::DateTime(d) => write!(output_file, "{}", d.as_f64()),
                 Data::String(s) | Data::DateTimeIso(s) | Data::DurationIso(s) => {
                     write!(output_file, "{s}")
